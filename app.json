@@ -20,7 +20,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.justinarsey.coinearn"    },
+      "package": "com.justinarsey.coinearn"
+    },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
@@ -45,6 +46,12 @@
       "eas": {
         "projectId": "b94cd9c5-b8bf-4351-98d3-0f24396d7ede"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/b94cd9c5-b8bf-4351-98d3-0f24396d7ede"
     }
   }
 }
