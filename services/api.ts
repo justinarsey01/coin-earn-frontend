@@ -1,7 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const API_URL = "https://coin-earn-backend.onrender.com/api";
-export const ACCESS_TOKEN_KEY = "@CoinEarnApp_access_token";
+const API_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  "https://coin-earn-backend.onrender.com/api";export const ACCESS_TOKEN_KEY = "@CoinEarnApp_access_token";
 
 export const REFRESH_TOKEN_KEY = "@CoinEarnApp_refresh_token";
 

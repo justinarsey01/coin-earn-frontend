@@ -7,11 +7,12 @@ import {
   TextInput,
   TouchableOpacity,
   Alert,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from '@expo/vector-icons';
 
 import { useUser } from '../context/UserContext';
 import { useRouter } from 'expo-router';
@@ -37,6 +38,9 @@ export default function LoginScreen() {
 
   const [password, setPassword] =
     useState('');
+
+  const [showPassword, setShowPassword] =
+    useState(false);
 
   const [loading, setLoading] =
     useState(false);
@@ -253,17 +257,44 @@ export default function LoginScreen() {
             Password
           </Text>
 
-          <TextInput
-            style={styles.input}
-            placeholder="Your password"
-            placeholderTextColor="#94A3B8"
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={password}
-            onChangeText={setPassword}
-            editable={!loading}
-          />
+          <View
+            style={styles.passwordContainer}
+          >
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="Your password"
+              placeholderTextColor="#94A3B8"
+              secureTextEntry={
+                !showPassword
+              }
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={password}
+              onChangeText={setPassword}
+              editable={!loading}
+            />
+
+            <TouchableOpacity
+              style={styles.eyeButton}
+              onPress={() =>
+                setShowPassword(
+                  !showPassword
+                )
+              }
+              disabled={loading}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={
+                  showPassword
+                    ? 'eye-off-outline'
+                    : 'eye-outline'
+                }
+                size={22}
+                color="#64748B"
+              />
+            </TouchableOpacity>
+          </View>
 
           {/* FORGOT PASSWORD */}
 
@@ -370,6 +401,7 @@ const styles =
       fontSize: 28,
       fontWeight: '800',
       color: Colors.text,
+      textAlign: 'center',
     },
 
     subtitle: {
@@ -377,6 +409,7 @@ const styles =
       color: Colors.gray,
       marginTop: 6,
       marginBottom: 30,
+      textAlign: 'center',
     },
 
     label: {
@@ -406,6 +439,55 @@ const styles =
       marginBottom: 16,
     },
 
+    // ==================================================
+    // PASSWORD
+    // ==================================================
+
+    passwordContainer: {
+      position: 'relative',
+      marginBottom: 16,
+    },
+
+    passwordInput: {
+      backgroundColor:
+        Colors.white,
+
+      borderRadius: 12,
+
+      padding: 14,
+
+      paddingRight: 50,
+
+      fontSize: 16,
+
+      color: Colors.text,
+
+      borderWidth: 1,
+
+      borderColor:
+        '#E2E8F0',
+    },
+
+    eyeButton: {
+      position: 'absolute',
+
+      right: 14,
+
+      top: 0,
+
+      bottom: 0,
+
+      justifyContent:
+        'center',
+
+      alignItems:
+        'center',
+    },
+
+    // ==================================================
+    // FORGOT PASSWORD
+    // ==================================================
+
     forgotPassword: {
       textAlign: 'right',
 
@@ -418,6 +500,10 @@ const styles =
 
       marginBottom: 10,
     },
+
+    // ==================================================
+    // LOGIN BUTTON
+    // ==================================================
 
     button: {
       backgroundColor:
@@ -449,6 +535,10 @@ const styles =
 
       fontWeight: '700',
     },
+
+    // ==================================================
+    // REGISTER LINK
+    // ==================================================
 
     link: {
       textAlign: 'center',

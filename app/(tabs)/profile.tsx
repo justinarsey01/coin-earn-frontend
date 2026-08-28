@@ -9,19 +9,17 @@ import {
   SafeAreaView,
   ScrollView,
   Image,
+  Share,
+  Platform,
 } from 'react-native';
-
 
 import { useRouter } from 'expo-router';
 
 import * as Clipboard from 'expo-clipboard';
-
 import * as Linking from 'expo-linking';
 
 import { useUser } from '../../context/UserContext';
-
 import { Colors } from '../../constants/Colors';
-
 import { Ionicons } from '@expo/vector-icons';
 
 export default function ProfileScreen() {
@@ -38,9 +36,8 @@ export default function ProfileScreen() {
   // COMPLETED TASKS
   // ==========================================
 
-  const completedTasks = tasks.filter(
-    (task) => task.completed
-  ).length;
+  const completedTasks =
+    tasks?.filter((task: any) => task.completed).length || 0;
 
   // ==========================================
   // REFERRAL INFORMATION
@@ -58,7 +55,13 @@ export default function ProfileScreen() {
     referralCount * REFERRAL_REWARD;
 
   // ==========================================
-  // GENERATE REFERRAL LINK
+  // REFERRAL LINK
+  // ==========================================
+  // This creates a deep link to:
+  // your-app://register?ref=YOUR_CODE
+  //
+  // Make sure your Expo app has a scheme
+  // configured in app.json or app.config.js.
   // ==========================================
 
   const referralLink = referralCode
@@ -70,14 +73,31 @@ export default function ProfileScreen() {
     : '';
 
   // ==========================================
+  // SHARE MESSAGE
+  // ==========================================
+
+  const shareMessage = referralCode
+    ? `🎁 Join CoinEarn and start earning coins!
+
+Use my referral code: ${referralCode}
+
+Earn coins by mining and completing tasks.
+
+Join using my referral link:
+${referralLink}
+
+Invite your friends and start earning! 🚀`
+    : '';
+
+  // ==========================================
   // COPY REFERRAL CODE
   // ==========================================
 
   const handleCopyReferralCode = async () => {
     if (!referralCode) {
       Alert.alert(
-        'Error',
-        'Referral code is not available yet.'
+        'Referral Code Unavailable',
+        'Your referral code is not available yet. Please try again later.'
       );
 
       return;
@@ -90,9 +110,8 @@ export default function ProfileScreen() {
 
       Alert.alert(
         'Copied',
-        'Your referral code has been copied.'
+        'Your referral code has been copied successfully.'
       );
-
     } catch (error) {
       console.error(
         'COPY REFERRAL CODE ERROR:',
@@ -101,7 +120,7 @@ export default function ProfileScreen() {
 
       Alert.alert(
         'Error',
-        'Unable to copy referral code.'
+        'Unable to copy your referral code.'
       );
     }
   };
@@ -113,8 +132,8 @@ export default function ProfileScreen() {
   const handleCopyReferralLink = async () => {
     if (!referralLink) {
       Alert.alert(
-        'Error',
-        'Referral link is not available yet.'
+        'Referral Link Unavailable',
+        'Your referral link is not available yet.'
       );
 
       return;
@@ -127,9 +146,8 @@ export default function ProfileScreen() {
 
       Alert.alert(
         'Link Copied',
-        'Your referral link has been copied.'
+        'Your referral link has been copied successfully.'
       );
-
     } catch (error) {
       console.error(
         'COPY REFERRAL LINK ERROR:',
@@ -138,7 +156,7 @@ export default function ProfileScreen() {
 
       Alert.alert(
         'Error',
-        'Unable to copy referral link.'
+        'Unable to copy your referral link.'
       );
     }
   };
@@ -146,48 +164,80 @@ export default function ProfileScreen() {
   // ==========================================
   // SHARE REFERRAL
   // ==========================================
+  // Opens the phone's native share menu.
+  //
+  // Users can choose WhatsApp, Telegram,
+  // Facebook, Messenger, X, and other apps
+  // installed on their device.
+  // ==========================================
 
   const handleShareReferral = async () => {
-    if (!referralCode) {
+    if (!referralCode || !referralLink) {
       Alert.alert(
-        'Error',
-        'Referral code is not available yet.'
+        'Referral Link Unavailable',
+        'Your referral information is not available yet. Please try again later.'
       );
 
       return;
     }
 
     try {
-      await Linking.openURL(
-        `whatsapp://send?text=${encodeURIComponent(
-          `🎁 Join CoinEarn and start earning coins!
-
-Use my referral code:
-
-${referralCode}
-
-You can earn coins by mining and completing tasks.
-
-Join here:
-${referralLink}
-
-I will receive 150 coins when you register using my referral code.`
-        )}`
+      const result = await Share.share(
+        {
+          title: 'Join CoinEarn',
+          message: shareMessage,
+          url:
+            Platform.OS === 'ios'
+              ? referralLink
+              : undefined,
+        },
+        {
+          dialogTitle: 'Invite friends to CoinEarn',
+        }
       );
 
+      if (
+        result.action === Share.sharedAction
+      ) {
+        console.log(
+          'REFERRAL SHARED SUCCESSFULLY'
+        );
+      }
+
+      if (
+        result.action === Share.dismissedAction
+      ) {
+        console.log(
+          'SHARE DIALOG DISMISSED'
+        );
+      }
     } catch (error) {
-      console.log(
-        'WhatsApp not available, using system share.'
+      console.error(
+        'SHARE REFERRAL ERROR:',
+        error
       );
 
-      await Clipboard.setStringAsync(
-        referralLink
-      );
+      // Fallback: copy the link if sharing fails
+      try {
+        await Clipboard.setStringAsync(
+          referralLink
+        );
 
-      Alert.alert(
-        'Referral Link Copied',
-        `Share this link with your friends:\n\n${referralLink}`
-      );
+        Alert.alert(
+          'Link Copied',
+          'The share menu could not be opened, so your referral link has been copied. You can now paste it anywhere and share it with your friends.'
+        );
+      } catch (copyError) {
+        console.error(
+          'REFERRAL FALLBACK COPY ERROR:',
+          copyError
+        );
+
+        Alert.alert(
+          'Error',
+          'Unable to share your referral link. Please try again.'
+        );
+      }
     }
   };
 
@@ -214,10 +264,9 @@ I will receive 150 coins when you register using my referral code.`
               await logout();
 
               router.replace('/login');
-
             } catch (error) {
               console.error(
-                'Logout error:',
+                'LOGOUT ERROR:',
                 error
               );
 
@@ -255,7 +304,6 @@ I will receive 150 coins when you register using my referral code.`
         }
         showsVerticalScrollIndicator={false}
       >
-
         {/* =====================================
             TITLE
         ====================================== */}
@@ -269,9 +317,6 @@ I will receive 150 coins when you register using my referral code.`
         ====================================== */}
 
         <View style={styles.userCard}>
-
-          {/* PROFILE AVATAR */}
-
           <View style={styles.avatar}>
             {user?.avatarUrl ? (
               <Image
@@ -289,27 +334,20 @@ I will receive 150 coins when you register using my referral code.`
             )}
           </View>
 
-          {/* USER NAME */}
-
           <Text style={styles.userName}>
             {fullName || 'User'}
           </Text>
-
-          {/* EMAIL */}
 
           <Text style={styles.userSub}>
             {user?.email ||
               'No email available'}
           </Text>
 
-          {/* PHONE */}
-
           {user?.phone ? (
             <Text style={styles.phone}>
               {user.phone}
             </Text>
           ) : null}
-
         </View>
 
         {/* =====================================
@@ -317,9 +355,6 @@ I will receive 150 coins when you register using my referral code.`
         ====================================== */}
 
         <View style={styles.statsRow}>
-
-          {/* COINS */}
-
           <View style={styles.statBox}>
             <Text style={styles.statValue}>
               {Number(balance || 0).toFixed(1)}
@@ -329,8 +364,6 @@ I will receive 150 coins when you register using my referral code.`
               Coins
             </Text>
           </View>
-
-          {/* TASKS */}
 
           <View style={styles.statBox}>
             <Text style={styles.statValue}>
@@ -342,8 +375,6 @@ I will receive 150 coins when you register using my referral code.`
             </Text>
           </View>
 
-          {/* REFERRALS */}
-
           <View style={styles.statBox}>
             <Text style={styles.statValue}>
               {referralCount}
@@ -353,11 +384,10 @@ I will receive 150 coins when you register using my referral code.`
               Referrals
             </Text>
           </View>
-
         </View>
 
         {/* =====================================
-            REFERRAL SECTION
+            REFERRAL PROGRAM
         ====================================== */}
 
         <Text style={styles.sectionTitle}>
@@ -365,39 +395,24 @@ I will receive 150 coins when you register using my referral code.`
         </Text>
 
         <View style={styles.referralCard}>
-
           {/* REWARD */}
 
           <View style={styles.rewardBox}>
-
             <Ionicons
               name="gift"
               size={28}
               color={Colors.primary}
             />
 
-            <View
-              style={{
-                marginLeft: 12,
-              }}
-            >
-              <Text
-                style={
-                  styles.rewardTitle
-                }
-              >
+            <View style={styles.rewardTextBox}>
+              <Text style={styles.rewardTitle}>
                 Earn {REFERRAL_REWARD} Coins
               </Text>
 
-              <Text
-                style={
-                  styles.rewardSubtitle
-                }
-              >
+              <Text style={styles.rewardSubtitle}>
                 For every successful referral
               </Text>
             </View>
-
           </View>
 
           {/* REFERRAL CODE */}
@@ -406,21 +421,15 @@ I will receive 150 coins when you register using my referral code.`
             Your Referral Code
           </Text>
 
-          <View
-            style={styles.codeContainer}
-          >
-
-            <Text
-              style={styles.referralCode}
-            >
+          <View style={styles.codeContainer}>
+            <Text style={styles.referralCode}>
               {referralCode || 'N/A'}
             </Text>
 
             <TouchableOpacity
               style={styles.copyIcon}
-              onPress={
-                handleCopyReferralCode
-              }
+              onPress={handleCopyReferralCode}
+              activeOpacity={0.7}
             >
               <Ionicons
                 name="copy-outline"
@@ -428,71 +437,41 @@ I will receive 150 coins when you register using my referral code.`
                 color={Colors.primary}
               />
             </TouchableOpacity>
-
           </View>
 
-          {/* REFERRAL COUNT */}
+          {/* REFERRAL STATS */}
 
-          <View
-            style={styles.referralStats}
-          >
-
-            <View>
-              <Text
-                style={
-                  styles.referralStatNumber
-                }
-              >
+          <View style={styles.referralStats}>
+            <View style={styles.referralStatBox}>
+              <Text style={styles.referralStatNumber}>
                 {referralCount}
               </Text>
 
-              <Text
-                style={
-                  styles.referralStatLabel
-                }
-              >
+              <Text style={styles.referralStatLabel}>
                 Successful Referrals
               </Text>
             </View>
 
-            <View
-              style={
-                styles.referralDivider
-              }
-            />
+            <View style={styles.referralDivider} />
 
-            <View>
-              <Text
-                style={
-                  styles.referralStatNumber
-                }
-              >
+            <View style={styles.referralStatBox}>
+              <Text style={styles.referralStatNumber}>
                 {referralEarnings}
               </Text>
 
-              <Text
-                style={
-                  styles.referralStatLabel
-                }
-              >
+              <Text style={styles.referralStatLabel}>
                 Coins Earned
               </Text>
             </View>
-
           </View>
 
           {/* REFERRAL LINK */}
 
-          <Text
-            style={styles.referralLabel}
-          >
+          <Text style={styles.referralLabel}>
             Your Referral Link
           </Text>
 
-          <View
-            style={styles.linkContainer}
-          >
-
+          <View style={styles.linkContainer}>
             <Text
               style={styles.linkText}
               numberOfLines={1}
@@ -503,9 +482,8 @@ I will receive 150 coins when you register using my referral code.`
 
             <TouchableOpacity
               style={styles.copyIcon}
-              onPress={
-                handleCopyReferralLink
-              }
+              onPress={handleCopyReferralLink}
+              activeOpacity={0.7}
             >
               <Ionicons
                 name="copy-outline"
@@ -513,43 +491,32 @@ I will receive 150 coins when you register using my referral code.`
                 color={Colors.primary}
               />
             </TouchableOpacity>
-
           </View>
 
           {/* SHARE */}
 
           <TouchableOpacity
             style={styles.shareBtn}
-            onPress={
-              handleShareReferral
-            }
+            onPress={handleShareReferral}
+            activeOpacity={0.8}
           >
-
             <Ionicons
               name="share-social"
               size={20}
               color={Colors.white}
             />
 
-            <Text
-              style={styles.shareBtnText}
-            >
+            <Text style={styles.shareBtnText}>
               Invite Friends
             </Text>
-
           </TouchableOpacity>
 
-          {/* INFORMATION */}
-
-          <Text
-            style={styles.referralInfo}
-          >
-            Share your referral link with
-            friends. When they create an
-            account using your referral code,
-            you receive 150 coins.
+          <Text style={styles.referralInfo}>
+            Tap "Invite Friends" to share your
+            referral link through WhatsApp,
+            Facebook, Telegram, Messenger, and
+            other available social apps.
           </Text>
-
         </View>
 
         {/* =====================================
@@ -567,8 +534,8 @@ I will receive 150 coins when you register using my referral code.`
           onPress={() =>
             router.push('/edit-profile')
           }
+          activeOpacity={0.7}
         >
-
           <Ionicons
             name="person-outline"
             size={22}
@@ -584,7 +551,6 @@ I will receive 150 coins when you register using my referral code.`
             size={18}
             color={Colors.gray}
           />
-
         </TouchableOpacity>
 
         {/* NOTIFICATIONS */}
@@ -597,8 +563,8 @@ I will receive 150 coins when you register using my referral code.`
               'Notification settings will be available soon.'
             );
           }}
+          activeOpacity={0.7}
         >
-
           <Ionicons
             name="notifications-outline"
             size={22}
@@ -614,7 +580,6 @@ I will receive 150 coins when you register using my referral code.`
             size={18}
             color={Colors.gray}
           />
-
         </TouchableOpacity>
 
         {/* HELP */}
@@ -627,8 +592,8 @@ I will receive 150 coins when you register using my referral code.`
               'Help and support will be available soon.'
             );
           }}
+          activeOpacity={0.7}
         >
-
           <Ionicons
             name="help-circle-outline"
             size={22}
@@ -644,7 +609,6 @@ I will receive 150 coins when you register using my referral code.`
             size={18}
             color={Colors.gray}
           />
-
         </TouchableOpacity>
 
         {/* =====================================
@@ -656,8 +620,8 @@ I will receive 150 coins when you register using my referral code.`
           onPress={() =>
             router.push('/admin')
           }
+          activeOpacity={0.8}
         >
-
           <Ionicons
             name="shield-checkmark"
             size={22}
@@ -667,7 +631,6 @@ I will receive 150 coins when you register using my referral code.`
           <Text style={styles.adminText}>
             Admin Dashboard
           </Text>
-
         </TouchableOpacity>
 
         {/* =====================================
@@ -680,8 +643,8 @@ I will receive 150 coins when you register using my referral code.`
             styles.logoutBtn,
           ]}
           onPress={handleLogout}
+          activeOpacity={0.8}
         >
-
           <Ionicons
             name="log-out-outline"
             size={22}
@@ -691,15 +654,11 @@ I will receive 150 coins when you register using my referral code.`
           <Text style={styles.adminText}>
             Logout
           </Text>
-
         </TouchableOpacity>
-
-        {/* VERSION */}
 
         <Text style={styles.version}>
           CoinEarn v1.0 • Demo
         </Text>
-
       </ScrollView>
     </SafeAreaView>
   );
@@ -710,7 +669,6 @@ I will receive 150 coins when you register using my referral code.`
 // ======================================================
 
 const styles = StyleSheet.create({
-
   container: {
     flex: 1,
     backgroundColor: Colors.background,
@@ -731,6 +689,10 @@ const styles = StyleSheet.create({
     color: Colors.text,
     marginBottom: 20,
   },
+
+  // ==========================================
+  // USER CARD
+  // ==========================================
 
   userCard: {
     backgroundColor: Colors.white,
@@ -782,6 +744,10 @@ const styles = StyleSheet.create({
     color: Colors.gray,
     marginTop: 3,
   },
+
+  // ==========================================
+  // STATS
+  // ==========================================
 
   statsRow: {
     flexDirection: 'row',
@@ -838,6 +804,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
+  rewardTextBox: {
+    marginLeft: 12,
+    flex: 1,
+  },
+
   rewardTitle: {
     fontSize: 16,
     fontWeight: '800',
@@ -868,10 +839,11 @@ const styles = StyleSheet.create({
   },
 
   referralCode: {
-    fontSize: 24,
+    flex: 1,
+    fontSize: 20,
     fontWeight: '800',
     color: Colors.primary,
-    letterSpacing: 2,
+    letterSpacing: 1.5,
   },
 
   copyIcon: {
@@ -890,6 +862,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 15,
     marginBottom: 20,
+  },
+
+  referralStatBox: {
+    flex: 1,
   },
 
   referralStatNumber: {
@@ -1013,5 +989,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 30,
   },
-
 });

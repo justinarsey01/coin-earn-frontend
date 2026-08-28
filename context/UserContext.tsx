@@ -4,17 +4,43 @@ import React, {
   useState,
   useEffect,
   ReactNode,
-} from "react";
+} from 'react';
+import {
+  Platform,
+} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
-import { scheduleMiningReminder } from "../utils/notifications";
+import {
+  scheduleMiningReminder,
+  getExpoPushToken,
+} from '../utils/notifications';
 
 import {
   apiRequest,
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
-} from "../services/api";
+} from '../services/api';
+
+// ======================================================
+// MINING CONSTANTS
+// ======================================================
+
+const MINING_DURATION_MS =
+  24 * 60 * 60 * 1000;
+
+const BASE_MINING_REWARD = 10;
+
+const BOOST_PERCENT = 0.03;
+
+const BOOST_REWARD =
+  BASE_MINING_REWARD *
+  BOOST_PERCENT;
+
+const BOOSTED_MINING_REWARD =
+  BASE_MINING_REWARD +
+  BOOST_REWARD;
+
+  
 
 // ======================================================
 // TYPES
@@ -32,9 +58,22 @@ export type Task = {
 
 export type Transaction = {
   id: string;
-  type: "mine" | "task" | "swap" | "referral" | "bonus" | "other";
+
+  type:
+    | 'mine'
+    | 'task'
+    | 'swap'
+    | 'transfer'
+    | 'sent'
+    | 'received'
+    | 'referral'
+    | 'bonus'
+    | 'other';
+
   amount: number;
+
   description: string;
+
   date: number;
 };
 
@@ -50,32 +89,52 @@ export type UserInfo = {
   avatarUrl: string | null;
 };
 
+// ======================================================
+// USER CONTEXT TYPE
+// ======================================================
+
 type UserContextType = {
   isLoggedIn: boolean;
 
   user: UserInfo | null;
+registerPushNotificationDevice:
+  () => Promise<void>;
+  // ====================================================
+  // WALLET
+  // ====================================================
 
   balance: number;
+
+  walletAddress: string | null;
+
+  refreshWallet: () => Promise<void>;
+
+  transferCoins: (
+    walletAddress: string,
+    amount: number,
+  ) => Promise<void>;
+
+  notifications: any[];
+
+unreadNotificationCount: number;
+
+refreshNotifications:
+  () => Promise<void>;
+
+markNotificationAsRead:
+  (notificationId: string) =>
+    Promise<void>;
+
+markAllNotificationsAsRead:
+  () => Promise<void>;
+
+  // ====================================================
+  // MINING
+  // ====================================================
 
   lastClaimTime: number | null;
 
   boostEndTime: number | null;
-
-  tasks: Task[];
-
-  transactions: Transaction[];
-
-  isLoading: boolean;
-
-  register: (data: any) => Promise<boolean>;
-
-  login: (email: string, password: string) => Promise<boolean>;
-
-  logout: () => Promise<void>;
-
-  markLoggedIn: () => void;
-
-  refreshProfile: () => Promise<void>;
 
   canClaim: boolean;
 
@@ -83,21 +142,50 @@ type UserContextType = {
 
   claimReward: () => Promise<void>;
 
+  miningReward: number;
+
+  miningRate: number;
+
+  boostMultiplier: number;
+
+  nextClaimAt: string | null;
+
+  fetchMiningStatus: () => Promise<void>;
+
+  // ====================================================
+  // BOOST
+  // ====================================================
+
   isBoostActive: boolean;
 
   boostTimeLeft: number;
 
   activateBoost: () => void;
 
-  completeTask: (taskId: string) => Promise<void>;
+  // ====================================================
+  // TASKS
+  // ====================================================
 
-  startTask: (taskId: string) => Promise<void>;
+  tasks: Task[];
+
+  completeTask: (
+    taskId: string,
+  ) => Promise<void>;
+
+  startTask: (
+    taskId: string,
+  ) => Promise<void>;
 
   addTask: (
     title: string,
     description: string,
     reward: number,
-    taskType: "watch_ad" | "watch_video" | "referral" | "profile" | "social",
+    taskType:
+      | 'watch_ad'
+      | 'watch_video'
+      | 'referral'
+      | 'profile'
+      | 'social',
   ) => Promise<void>;
 
   editTask: (
@@ -107,11 +195,52 @@ type UserContextType = {
     reward: number,
   ) => Promise<void>;
 
-  deleteTask: (id: string) => Promise<void>;
+  deleteTask: (
+    id: string,
+  ) => Promise<void>;
 
   resetAllTasks: () => void;
 
-  swapCoins: (amount: number, type: "airtime" | "data" | "usdt") => boolean;
+  // ====================================================
+  // TRANSACTIONS
+  // ====================================================
+
+  transactions: Transaction[];
+
+  refreshTransactions: () => Promise<void>;
+
+  // ====================================================
+  // AUTH
+  // ====================================================
+
+  isLoading: boolean;
+
+  register: (
+    data: any,
+  ) => Promise<boolean>;
+
+  login: (
+    email: string,
+    password: string,
+  ) => Promise<boolean>;
+
+  logout: () => Promise<void>;
+
+  markLoggedIn: () => void;
+
+  refreshProfile: () => Promise<void>;
+
+  // ====================================================
+  // SWAP
+  // ====================================================
+
+  swapCoins: (
+    amount: number,
+    type:
+      | 'airtime'
+      | 'data'
+      | 'usdt',
+  ) => boolean;
 };
 
 // ======================================================
@@ -119,271 +248,910 @@ type UserContextType = {
 // ======================================================
 
 const defaultTasks: Task[] = [];
+
 // ======================================================
 // CONTEXT
 // ======================================================
 
-const UserContext = createContext<UserContextType | undefined>(undefined);
+const UserContext =
+  createContext<
+    UserContextType | undefined
+  >(undefined);
 
 // ======================================================
 // PROVIDER
 // ======================================================
 
-export const UserProvider = ({ children }: { children: ReactNode }) => {
+export const UserProvider = ({
+  children,
+}: {
+  children: ReactNode;
+}) => {
   // ====================================================
-  // STATE
+  // AUTH STATE
   // ====================================================
 
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [
+    isLoggedIn,
+    setIsLoggedIn,
+  ] = useState(false);
 
-  const [user, setUser] = useState<UserInfo | null>(null);
+  const [
+    user,
+    setUser,
+  ] = useState<UserInfo | null>(
+    null,
+  );
 
-  const [balance, setBalance] = useState(0);
+  const [
+    isLoading,
+    setIsLoading,
+  ] = useState(true);
 
-  const [lastClaimTime, setLastClaimTime] = useState<number | null>(null);
+  // ====================================================
+  // WALLET STATE
+  // ====================================================
 
-  const [boostEndTime, setBoostEndTime] = useState<number | null>(null);
+  const [
+    balance,
+    setBalance,
+  ] = useState(0);
 
-  const [tasks, setTasks] = useState<Task[]>(defaultTasks);
+  const [
+    walletAddress,
+    setWalletAddress,
+  ] = useState<string | null>(
+    null,
+  );
 
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  // ====================================================
+  // MINING STATE
+  // ====================================================
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [
+    lastClaimTime,
+    setLastClaimTime,
+  ] = useState<number | null>(
+    null,
+  );
 
-  const [timeLeft, setTimeLeft] = useState(0);
+  const [
+    timeLeft,
+    setTimeLeft,
+  ] = useState(0);
 
-  const [boostTimeLeft, setBoostTimeLeft] = useState(0);
+  const [
+    miningReward,
+    setMiningReward,
+  ] = useState(
+    BASE_MINING_REWARD,
+  );
+
+  const [
+    miningRate,
+    setMiningRate,
+  ] = useState(
+    BASE_MINING_REWARD / 24,
+  );
+
+  const [
+    boostMultiplier,
+    setBoostMultiplier,
+  ] = useState(1);
+
+  const [
+    nextClaimAt,
+    setNextClaimAt,
+  ] = useState<string | null>(
+    null,
+  );
+
+  // ====================================================
+  // BOOST STATE
+  // ====================================================
+
+  const [
+    boostEndTime,
+    setBoostEndTime,
+  ] = useState<number | null>(
+    null,
+  );
+
+  const [
+    boostTimeLeft,
+    setBoostTimeLeft,
+  ] = useState(0);
+
+  // ====================================================
+  // TASK STATE
+  // ====================================================
+
+  const [
+    tasks,
+    setTasks,
+  ] = useState<Task[]>(
+    defaultTasks,
+  );
+
+  // ====================================================
+  // TRANSACTION STATE
+  // ====================================================
+
+  const [
+    transactions,
+    setTransactions,
+  ] = useState<Transaction[]>(
+    [],
+  );
 
   // ====================================================
   // CONVERT DATABASE PROFILE
   // ====================================================
 
-  const convertProfile = (profile: any): UserInfo => {
+  const convertProfile = (
+    profile: any,
+  ): UserInfo => {
     return {
-      firstName: profile?.first_name || "",
+      firstName:
+        profile?.first_name || '',
 
-      lastName: profile?.last_name || "",
+      lastName:
+        profile?.last_name || '',
 
-      phone: profile?.phone || "",
+      phone:
+        profile?.phone || '',
 
-      email: profile?.email || "",
+      email:
+        profile?.email || '',
 
-      userId: profile?.id || "",
+      userId:
+        String(
+          profile?.id || '',
+        ),
 
-      referralCode: profile?.referral_code || "",
+      referralCode:
+        profile?.referral_code || '',
 
-      referredBy: profile?.referred_by || null,
+      referredBy:
+        profile?.referred_by || null,
 
-      referralCount: Number(profile?.referral_count || 0),
+      referralCount: Number(
+        profile?.referral_count || 0,
+      ),
 
-      avatarUrl: profile?.avatar_url || null,
+      avatarUrl:
+        profile?.avatar_url || null,
+    };
+  };
+
+  // ======notification======
+const [
+  notifications,
+  setNotifications,
+] = useState<any[]>([]);
+
+const [
+  unreadNotificationCount,
+  setUnreadNotificationCount,
+] = useState(0);
+
+  // ====================================================
+  // CONVERT DATABASE TRANSACTION
+  // ====================================================
+
+
+  const convertTransaction = (
+    transaction: any,
+  ): Transaction => {
+    const rawAmount =
+      Number(
+        transaction?.amount ?? 0,
+      );
+
+    let type:
+      Transaction['type'] =
+        transaction?.type || 'other';
+
+    // ==================================================
+    // SUPPORT OLD DATABASE TRANSFERS
+    // ==================================================
+
+    if (type === 'transfer') {
+      if (rawAmount < 0) {
+        type = 'sent';
+      } else if (rawAmount > 0) {
+        type = 'received';
+      }
+    }
+
+    // ==================================================
+    // SUPPORT EXPLICIT SENT / RECEIVED TYPES
+    // ==================================================
+
+    if (type === 'sent') {
+      type = 'sent';
+    }
+
+    if (type === 'received') {
+      type = 'received';
+    }
+
+    return {
+      id:
+        String(
+          transaction?.id || '',
+        ),
+
+      type,
+
+      amount: rawAmount,
+
+      description:
+        transaction?.description ||
+        'Wallet transaction',
+
+      date:
+        transaction?.created_at
+          ? new Date(
+              transaction.created_at,
+            ).getTime()
+          : Date.now(),
     };
   };
 
   // ====================================================
-  // LOAD WALLET
+  // SORT TRANSACTIONS
   // ====================================================
 
-  const refreshWallet = async () => {
-    try {
-      console.log("====================================");
-
-      console.log("REFRESHING WALLET...");
-
-      const response = await apiRequest("/wallet");
-
-      console.log("WALLET RESPONSE:", response);
-
-      if (!response?.success) {
-        throw new Error(response?.message || "Unable to load wallet");
-      }
-
-      const wallet = response?.data;
-
-      if (!wallet) {
-        throw new Error("No wallet returned from server");
-      }
-
-      // --------------------------------------------
-      // UPDATE BALANCE
-      // --------------------------------------------
-
-      setBalance(Number(wallet.balance || 0));
-
-      // --------------------------------------------
-      // UPDATE LAST MINING TIME
-      // --------------------------------------------
-
-      if (wallet.last_mined_at) {
-        setLastClaimTime(new Date(wallet.last_mined_at).getTime());
-      } else {
-        setLastClaimTime(null);
-      }
-
-      console.log("DATABASE BALANCE:", wallet.balance);
-
-      console.log("LAST MINED:", wallet.last_mined_at);
-
-      console.log("====================================");
-    } catch (error) {
-      console.error("REFRESH WALLET ERROR:", error);
-    }
+  const sortTransactions = (
+    items: Transaction[],
+  ): Transaction[] => {
+    return [...items].sort(
+      (a, b) =>
+        b.date - a.date,
+    );
   };
 
   // ====================================================
-  // LOAD TASKS FROM DATABASE
+  // UPDATE MINING VALUES
   // ====================================================
 
-  const refreshTasks = async () => {
-    try {
-      console.log("====================================");
-      console.log("LOADING TASKS FROM DATABASE...");
+  const updateMiningValues = (
+    boostActive: boolean,
+  ) => {
+    const reward =
+      boostActive
+        ? BOOSTED_MINING_REWARD
+        : BASE_MINING_REWARD;
 
-      const response = await apiRequest("/tasks");
+    const multiplier =
+      boostActive
+        ? 1 + BOOST_PERCENT
+        : 1;
 
-      console.log("TASKS RESPONSE:", response);
+    setMiningReward(reward);
 
-      if (!response?.success) {
-        throw new Error(response?.message || "Failed to load tasks");
+    setMiningRate(
+      reward / 24,
+    );
+
+    setBoostMultiplier(
+      multiplier,
+    );
+  };
+
+  // ====================================================
+  // RESET USER DATA
+  // ====================================================
+
+  const resetUserData = () => {
+    setIsLoggedIn(false);
+
+    setUser(null);
+
+    setBalance(0);
+
+    setWalletAddress(null);
+
+    setLastClaimTime(null);
+
+    setBoostEndTime(null);
+
+    setTasks(defaultTasks);
+
+    setTransactions([]);
+
+    setTimeLeft(0);
+
+    setBoostTimeLeft(0);
+    setNotifications([]);
+
+setUnreadNotificationCount(0);
+
+    setMiningReward(
+      BASE_MINING_REWARD,
+    );
+
+    setMiningRate(
+      BASE_MINING_REWARD / 24,
+    );
+
+    setBoostMultiplier(1);
+
+    setNextClaimAt(null);
+  };
+
+  // ====================================================
+  // LOAD WALLET FROM DATABASE
+  // ====================================================
+
+  const refreshWallet =
+    async (): Promise<void> => {
+      try {
+        const response =
+          await apiRequest(
+            '/wallet',
+          );
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Unable to load wallet',
+          );
+        }
+
+        const wallet =
+          response?.data;
+
+        if (!wallet) {
+          throw new Error(
+            'No wallet returned from server',
+          );
+        }
+
+        setBalance(
+          Number(
+            wallet.balance ?? 0,
+          ),
+        );
+
+        const address =
+          wallet.wallet_address ||
+          wallet.walletAddress ||
+          null;
+
+        setWalletAddress(
+          address
+            ? String(address)
+                .trim()
+                .toUpperCase()
+            : null,
+        );
+
+        if (
+          wallet.last_mined_at
+        ) {
+          const claimTime =
+            new Date(
+              wallet.last_mined_at,
+            ).getTime();
+
+          setLastClaimTime(
+            claimTime,
+          );
+
+          setNextClaimAt(
+            new Date(
+              claimTime +
+                MINING_DURATION_MS,
+            ).toISOString(),
+          );
+        } else {
+          setLastClaimTime(null);
+
+          setNextClaimAt(null);
+        }
+      } catch (error) {
+        console.error(
+          'REFRESH WALLET ERROR:',
+          error,
+        );
+
+        throw error;
       }
+    };
 
-      const databaseTasks = response?.data || [];
+  // ====================================================
+  // LOAD TRANSACTION HISTORY FROM DATABASE
+  // ====================================================
 
-      const convertedTasks: Task[] = databaseTasks.map((task: any) => ({
+  const refreshTransactions =
+    async (): Promise<void> => {
+      try {
+        console.log(
+          'LOADING TRANSACTION HISTORY FROM DATABASE...',
+        );
+
+        const response =
+          await apiRequest(
+            '/wallet/transactions',
+          );
+
+        console.log(
+          'TRANSACTION HISTORY RESPONSE:',
+          response,
+        );
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to load transaction history.',
+          );
+        }
+
+        const databaseTransactions =
+          Array.isArray(
+            response?.data,
+          )
+            ? response.data
+            : [];
+
+        const convertedTransactions =
+          sortTransactions(
+            databaseTransactions.map(
+              convertTransaction,
+            ),
+          );
+
+        setTransactions(
+          convertedTransactions,
+        );
+
+        console.log(
+          'TRANSACTION HISTORY LOADED:',
+          convertedTransactions,
+        );
+      } catch (error) {
+        console.error(
+          'REFRESH TRANSACTIONS ERROR:',
+          error,
+        );
+
+        setTransactions([]);
+
+        throw error;
+      }
+    };
+
+  // ====================================================
+  // TRANSFER COINS
+  // ====================================================
+
+  const transferCoins =
+    async (
+      recipientWalletAddress: string,
+      amount: number,
+    ): Promise<void> => {
+      try {
+        const normalizedWalletAddress =
+          String(
+            recipientWalletAddress || '',
+          )
+            .trim()
+            .toUpperCase();
+
+        if (
+          !normalizedWalletAddress
+        ) {
+          throw new Error(
+            'Recipient wallet address is required.',
+          );
+        }
+
+        const transferAmount =
+          Number(amount);
+
+        if (
+          !Number.isFinite(
+            transferAmount,
+          ) ||
+          transferAmount <= 0
+        ) {
+          throw new Error(
+            'Please enter a valid amount greater than 0.',
+          );
+        }
+
+        if (
+          !Number.isInteger(
+            transferAmount * 100,
+          )
+        ) {
+          throw new Error(
+            'Amount can have a maximum of 2 decimal places.',
+          );
+        }
+
+        if (
+          normalizedWalletAddress ===
+          walletAddress
+            ?.trim()
+            .toUpperCase()
+        ) {
+          throw new Error(
+            'You cannot transfer coins to your own wallet.',
+          );
+        }
+
+        console.log(
+          'SENDING TRANSFER REQUEST:',
+          {
+            walletAddress:
+              normalizedWalletAddress,
+            amount:
+              transferAmount,
+          },
+        );
+
+        const response =
+          await apiRequest(
+            '/wallet/transfer',
+            {
+              method: 'POST',
+
+              body:
+                JSON.stringify({
+                  walletAddress:
+                    normalizedWalletAddress,
+
+                  amount:
+                    transferAmount,
+                }),
+            },
+          );
+
+        console.log(
+          'TRANSFER RESPONSE:',
+          response,
+        );
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Coin transfer failed.',
+          );
+        }
+
+        // ==================================================
+        // UPDATE WALLET IMMEDIATELY IF RETURNED
+        // ==================================================
+
+        const updatedWallet =
+          response?.data?.wallet;
+
+        if (updatedWallet) {
+          setBalance(
+            Number(
+              updatedWallet.balance ?? 0,
+            ),
+          );
+
+          const address =
+            updatedWallet.wallet_address ||
+            updatedWallet.walletAddress;
+
+          if (address) {
+            setWalletAddress(
+              String(address)
+                .trim()
+                .toUpperCase(),
+            );
+          }
+        }
+
+        // ==================================================
+        // ADD RETURNED SENDER TRANSACTION IMMEDIATELY
+        // ==================================================
+
+        const senderTransaction =
+          response?.data
+            ?.senderTransaction;
+
+        if (
+          senderTransaction
+        ) {
+          const converted =
+            convertTransaction(
+              senderTransaction,
+            );
+
+          setTransactions(
+            (currentTransactions) => {
+              const exists =
+                currentTransactions.some(
+                  (transaction) =>
+                    transaction.id ===
+                    converted.id,
+                );
+
+              if (exists) {
+                return currentTransactions;
+              }
+
+              return sortTransactions([
+                converted,
+                ...currentTransactions,
+              ]);
+            },
+          );
+        }
+
+        // ==================================================
         // IMPORTANT:
-        // Always use the UUID coming from Supabase
-        id: String(task.id),
+        // RELOAD EVERYTHING FROM DATABASE
+        // ==================================================
 
-        title: task.title || "",
+        await refreshWallet();
 
-        description: task.description || "",
+        await refreshTransactions();
 
-        reward: Number(task.reward || 0),
+        console.log(
+          'TRANSFER DATABASE HISTORY REFRESHED SUCCESSFULLY',
+        );
+      } catch (error: any) {
+        console.error(
+          'TRANSFER COINS ERROR:',
+          error,
+        );
 
-        completed: Boolean(task.completed),
+        throw new Error(
+          error?.message ||
+            'Failed to transfer coins.',
+        );
+      }
+    };
 
-        started: Boolean(task.started),
+  // ====================================================
+  // LOAD MINING STATUS
+  // ====================================================
 
-        startedAt: task.started_at ? new Date(task.started_at).getTime() : null,
-      }));
+  const fetchMiningStatus =
+    async (): Promise<void> => {
+      await refreshWallet();
+    };
 
-      console.log("DATABASE TASK COUNT:", convertedTasks.length);
+  // ====================================================
+  // LOAD TASKS
+  // ====================================================
+
+  const refreshTasks =
+    async (): Promise<void> => {
+      try {
+        const response =
+          await apiRequest(
+            '/tasks',
+          );
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to load tasks.',
+          );
+        }
+
+        const databaseTasks =
+          response?.data || [];
+
+        const convertedTasks: Task[] =
+          databaseTasks.map(
+            (task: any) => ({
+              id:
+                String(task.id),
+
+              title:
+                task.title || '',
+
+              description:
+                task.description || '',
+
+              reward: Number(
+                task.reward || 0,
+              ),
+
+              completed: Boolean(
+                task.completed,
+              ),
+
+              started: Boolean(
+                task.started,
+              ),
+
+              startedAt:
+                task.started_at
+                  ? new Date(
+                      task.started_at,
+                    ).getTime()
+                  : null,
+            }),
+          );
+
+        setTasks(
+          convertedTasks,
+        );
+      } catch (error) {
+        console.error(
+          'REFRESH TASKS ERROR:',
+          error,
+        );
+
+        setTasks([]);
+      }
+    };
+    // ====================================================
+// REGISTER PUSH NOTIFICATION DEVICE
+// ====================================================
+
+const registerPushNotificationDevice =
+  async (): Promise<void> => {
+    try {
+      const expoPushToken =
+        await getExpoPushToken();
+
+      if (!expoPushToken) {
+        console.log(
+          'NO EXPO PUSH TOKEN AVAILABLE',
+        );
+
+        return;
+      }
 
       console.log(
-        "DATABASE TASK IDS:",
-        convertedTasks.map((task) => task.id),
+        'REGISTERING EXPO PUSH TOKEN WITH SERVER:',
+        expoPushToken,
       );
 
-      setTasks(convertedTasks);
+      const response =
+        await apiRequest(
+          '/notifications/device',
+          {
+            method:
+              'POST',
 
-      console.log("TASKS LOADED SUCCESSFULLY");
-      console.log("====================================");
+            body:
+              JSON.stringify({
+                expoPushToken,
+
+                platform:
+                  Platform.OS,
+
+                deviceName:
+                  'CoinEarn Device',
+              }),
+          },
+        );
+
+      console.log(
+        'PUSH DEVICE REGISTRATION RESPONSE:',
+        response,
+      );
+
+      if (
+        !response?.success
+      ) {
+        console.error(
+          'PUSH DEVICE REGISTRATION FAILED:',
+          response?.message,
+        );
+
+        return;
+      }
+
+      console.log(
+        'PUSH DEVICE REGISTERED SUCCESSFULLY',
+      );
     } catch (error) {
-      console.error("REFRESH TASKS ERROR:", error);
-
-      // Do NOT put fake/default tasks here.
-      setTasks([]);
+      console.error(
+        'REGISTER PUSH NOTIFICATION DEVICE ERROR:',
+        error,
+      );
     }
   };
+
   // ====================================================
   // LOAD PROFILE
   // ====================================================
 
-  const refreshProfile = async () => {
-    try {
-      console.log("====================================");
+  const refreshProfile =
+    async (): Promise<void> => {
+      try {
+        const response =
+          await apiRequest(
+            '/auth/me',
+          );
 
-      console.log("REFRESHING PROFILE...");
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Unable to load profile.',
+          );
+        }
 
-      const response = await apiRequest("/auth/me");
+        const profile =
+          response?.data?.profile;
 
-      console.log("AUTH ME RESPONSE:", response);
+        if (!profile) {
+          throw new Error(
+            'No profile returned from server.',
+          );
+        }
 
-      if (!response?.success) {
-        throw new Error(response?.message || "Unable to load profile");
+        setUser(
+          convertProfile(profile),
+        );
+
+        setIsLoggedIn(true);
+        await registerPushNotificationDevice();
+        await Promise.all([
+          refreshWallet(),
+          refreshTasks(),
+          refreshTransactions(),
+        ]);
+      } catch (error) {
+        console.error(
+          'REFRESH PROFILE ERROR:',
+          error,
+        );
+
+        throw error;
       }
-
-      const profile = response?.data?.profile;
-
-      if (!profile) {
-        throw new Error("No profile returned from server");
-      }
-
-      const databaseUser = convertProfile(profile);
-
-      setUser(databaseUser);
-
-      setIsLoggedIn(true);
-
-      console.log("PROFILE LOADED:", databaseUser);
-
-      // Load wallet after profile
-      await refreshWallet();
-
-      // Load tasks
-      await refreshTasks();
-
-      console.log("====================================");
-    } catch (error) {
-      console.error("REFRESH PROFILE ERROR:", error);
-
-      throw error;
-    }
-  };
+    };
 
   // ====================================================
   // RESTORE SESSION
   // ====================================================
 
-  const restoreSession = async () => {
-    try {
-      setIsLoading(true);
-
-      console.log("====================================");
-
-      console.log("RESTORING SESSION...");
-
-      const accessToken = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
-
-      if (!accessToken) {
-        console.log("NO ACCESS TOKEN");
-
-        setIsLoggedIn(false);
-        setUser(null);
-
-        return;
-      }
-
-      console.log("ACCESS TOKEN FOUND");
-
-      // ----------------------------------------------
-      // VERIFY TOKEN
-      // ----------------------------------------------
-
+  const restoreSession =
+    async (): Promise<void> => {
       try {
-        await refreshProfile();
+        setIsLoading(true);
 
-        console.log("SESSION RESTORED SUCCESSFULLY");
+        const accessToken =
+          await AsyncStorage.getItem(
+            ACCESS_TOKEN_KEY,
+          );
+
+        if (!accessToken) {
+          resetUserData();
+
+          return;
+        }
+
+        try {
+          await refreshProfile();
+        } catch (error) {
+          console.error(
+            'TOKEN INVALID OR SESSION EXPIRED:',
+            error,
+          );
+
+          await AsyncStorage.multiRemove([
+            ACCESS_TOKEN_KEY,
+            REFRESH_TOKEN_KEY,
+          ]);
+
+          resetUserData();
+        }
       } catch (error) {
-        console.error("TOKEN INVALID OR SESSION EXPIRED:", error);
+        console.error(
+          'SESSION RESTORATION ERROR:',
+          error,
+        );
 
-        await AsyncStorage.multiRemove([ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY]);
-
-        setIsLoggedIn(false);
-        setUser(null);
-        setBalance(0);
-        setTasks(defaultTasks);
-        setTransactions([]);
+        resetUserData();
+      } finally {
+        setIsLoading(false);
       }
-    } catch (error) {
-      console.error("SESSION RESTORATION ERROR:", error);
-
-      setIsLoggedIn(false);
-      setUser(null);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    };
 
   // ====================================================
   // INITIALIZE
@@ -400,372 +1168,394 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
   const markLoggedIn = () => {
     setIsLoggedIn(true);
 
-    refreshProfile().catch((error) => {
-      console.error("PROFILE LOAD AFTER LOGIN FAILED:", error);
-    });
+    refreshProfile().catch(
+      (error) => {
+        console.error(
+          'PROFILE LOAD AFTER LOGIN FAILED:',
+          error,
+        );
+      },
+    );
   };
 
   // ====================================================
   // REGISTER
   // ====================================================
 
-  const register = async (data: any): Promise<boolean> => {
-    try {
-      console.log("REGISTERING USER...");
+  const register =
+    async (
+      data: any,
+    ): Promise<boolean> => {
+      try {
+        const response =
+          await apiRequest(
+            '/auth/register',
+            {
+              method: 'POST',
 
-      const response = await apiRequest("/auth/register", {
-        method: "POST",
+              body:
+                JSON.stringify({
+                  firstName:
+                    data.firstName,
 
-        body: JSON.stringify({
-          firstName: data.firstName,
+                  lastName:
+                    data.lastName,
 
-          lastName: data.lastName,
+                  phone:
+                    data.phone,
 
-          phone: data.phone,
+                  email:
+                    data.email
+                      .trim()
+                      .toLowerCase(),
 
-          email: data.email.trim().toLowerCase(),
+                  password:
+                    data.password,
 
-          password: data.password,
+                  referralCode:
+                    data.referralCode
+                      ?.trim()
+                      .toUpperCase() ||
+                    null,
+                }),
+            },
+          );
 
-          referralCode: data.referralCode?.trim().toUpperCase() || null,
-        }),
-      });
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Registration failed.',
+          );
+        }
 
-      console.log("REGISTER RESPONSE:", response);
+        const session =
+          response?.data?.session;
 
-      if (!response?.success) {
-        throw new Error(response?.message || "Registration failed");
-      }
+        if (
+          !session?.access_token
+        ) {
+          return false;
+        }
 
-      const session = response?.data?.session;
+        await AsyncStorage.setItem(
+          ACCESS_TOKEN_KEY,
+          session.access_token,
+        );
 
-      if (!session?.access_token) {
-        console.error("NO ACCESS TOKEN AFTER REGISTRATION");
+        if (
+          session.refresh_token
+        ) {
+          await AsyncStorage.setItem(
+            REFRESH_TOKEN_KEY,
+            session.refresh_token,
+          );
+        }
+
+        const profile =
+          response?.data?.profile;
+
+        if (profile) {
+          setUser(
+            convertProfile(profile),
+          );
+
+          setIsLoggedIn(true);
+        }
+
+        await Promise.all([
+          refreshWallet(),
+          refreshTasks(),
+          refreshTransactions(),
+        ]);
+
+        return true;
+      } catch (error) {
+        console.error(
+          'REGISTER ERROR:',
+          error,
+        );
 
         return false;
       }
-
-      // ----------------------------------------------
-      // SAVE ACCESS TOKEN
-      // ----------------------------------------------
-
-      await AsyncStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
-
-      // ----------------------------------------------
-      // SAVE REFRESH TOKEN
-      // ----------------------------------------------
-
-      if (session.refresh_token) {
-        await AsyncStorage.setItem(REFRESH_TOKEN_KEY, session.refresh_token);
-      }
-
-      // ----------------------------------------------
-      // LOAD EVERYTHING
-      // ----------------------------------------------
-
-      const profile = response?.data?.profile;
-
-      if (profile) {
-        setUser(convertProfile(profile));
-
-        setIsLoggedIn(true);
-      }
-
-      await refreshWallet();
-
-      await refreshTasks();
-
-      return true;
-    } catch (error: any) {
-      console.error("REGISTER ERROR:", error);
-
-      return false;
-    }
-  };
+    };
 
   // ====================================================
   // LOGIN
   // ====================================================
 
-  const login = async (email: string, password: string): Promise<boolean> => {
-    try {
-      console.log("====================================");
+  const login =
+    async (
+      email: string,
+      password: string,
+    ): Promise<boolean> => {
+      try {
+        const response =
+          await apiRequest(
+            '/auth/login',
+            {
+              method: 'POST',
 
-      console.log("LOGIN STARTED");
+              body:
+                JSON.stringify({
+                  email:
+                    email
+                      .trim()
+                      .toLowerCase(),
 
-      const response = await apiRequest("/auth/login", {
-        method: "POST",
+                  password,
+                }),
+            },
+          );
 
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
+        if (!response?.success) {
+          return false;
+        }
 
-          password,
-        }),
-      });
+        const session =
+          response?.data?.session;
 
-      console.log("LOGIN RESPONSE:", response);
+        if (
+          !session?.access_token
+        ) {
+          return false;
+        }
 
-      if (!response?.success) {
-        console.error("LOGIN FAILED:", response?.message);
+        await AsyncStorage.setItem(
+          ACCESS_TOKEN_KEY,
+          session.access_token,
+        );
+
+        if (
+          session.refresh_token
+        ) {
+          await AsyncStorage.setItem(
+            REFRESH_TOKEN_KEY,
+            session.refresh_token,
+          );
+        }
+
+        const profile =
+          response?.data?.profile;
+
+        if (profile) {
+          setUser(
+            convertProfile(profile),
+          );
+
+          setIsLoggedIn(true);
+        } else {
+          await refreshProfile();
+        }
+
+        await Promise.all([
+  refreshWallet(),
+  refreshTasks(),
+  refreshTransactions(),
+  refreshNotifications(),
+]);
+
+        return true;
+      } catch (error) {
+        console.error(
+          'LOGIN ERROR:',
+          error,
+        );
 
         return false;
       }
-
-      const session = response?.data?.session;
-
-      if (!session?.access_token) {
-        console.error("NO ACCESS TOKEN RECEIVED");
-
-        return false;
-      }
-
-      // ----------------------------------------------
-      // SAVE ACCESS TOKEN
-      // ----------------------------------------------
-
-      await AsyncStorage.setItem(ACCESS_TOKEN_KEY, session.access_token);
-
-      // ----------------------------------------------
-      // SAVE REFRESH TOKEN
-      // ----------------------------------------------
-
-      if (session.refresh_token) {
-        await AsyncStorage.setItem(REFRESH_TOKEN_KEY, session.refresh_token);
-      }
-
-      console.log("AUTH TOKENS SAVED");
-
-      // ----------------------------------------------
-      // LOAD PROFILE
-      // ----------------------------------------------
-
-      const profile = response?.data?.profile;
-
-      if (profile) {
-        const databaseUser = convertProfile(profile);
-
-        setUser(databaseUser);
-
-        setIsLoggedIn(true);
-
-        console.log("USER PROFILE LOADED:", databaseUser);
-      } else {
-        await refreshProfile();
-      }
-
-      // ----------------------------------------------
-      // LOAD WALLET
-      // ----------------------------------------------
-
-      await refreshWallet();
-
-      // ----------------------------------------------
-      // LOAD TASKS
-      // ----------------------------------------------
-
-      await refreshTasks();
-
-      console.log("LOGIN COMPLETED");
-
-      return true;
-    } catch (error) {
-      console.error("LOGIN ERROR:", error);
-
-      return false;
-    }
-  };
+    };
 
   // ====================================================
   // LOGOUT
   // ====================================================
 
-  const logout = async () => {
-    try {
-      console.log("LOGGING OUT...");
-
-      // ----------------------------------------------
-      // OPTIONAL SERVER LOGOUT
-      // ----------------------------------------------
-
+  const logout =
+    async (): Promise<void> => {
       try {
-        await apiRequest("/auth/logout", {
-          method: "POST",
-        });
+        try {
+          await apiRequest(
+            '/auth/logout',
+            {
+              method: 'POST',
+            },
+          );
+        } catch (error) {
+          console.log(
+            'SERVER LOGOUT FAILED:',
+            error,
+          );
+        }
+
+        await AsyncStorage.multiRemove([
+          ACCESS_TOKEN_KEY,
+          REFRESH_TOKEN_KEY,
+        ]);
+
+        resetUserData();
       } catch (error) {
-        console.log("SERVER LOGOUT FAILED:", error);
+        console.error(
+          'LOGOUT ERROR:',
+          error,
+        );
       }
-
-      // ----------------------------------------------
-      // REMOVE TOKENS
-      // ----------------------------------------------
-
-      await AsyncStorage.multiRemove([ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY]);
-
-      // ----------------------------------------------
-      // CLEAR STATE
-      // ----------------------------------------------
-
-      setIsLoggedIn(false);
-
-      setUser(null);
-
-      setBalance(0);
-
-      setLastClaimTime(null);
-
-      setBoostEndTime(null);
-
-      setTasks(defaultTasks);
-
-      setTransactions([]);
-
-      console.log("LOGOUT SUCCESSFUL");
-    } catch (error) {
-      console.error("LOGOUT ERROR:", error);
-    }
-  };
+    };
 
   // ====================================================
-  // TIMERS
+  // MINING + BOOST TIMERS
   // ====================================================
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-
-      // --------------------------------------------
-      // MINING TIMER
-      // --------------------------------------------
+    const updateTimers = () => {
+      const now =
+        Date.now();
 
       if (lastClaimTime) {
-        const nextClaim = lastClaimTime + 24 * 60 * 60 * 1000;
+        const nextClaim =
+          lastClaimTime +
+          MINING_DURATION_MS;
 
-        const remaining = Math.max(0, Math.floor((nextClaim - now) / 1000));
+        const remainingMs =
+          Math.max(
+            0,
+            nextClaim - now,
+          );
 
-        setTimeLeft(remaining);
+        const remainingSeconds =
+          Math.ceil(
+            remainingMs / 1000,
+          );
+
+        setTimeLeft(
+          remainingSeconds,
+        );
+
+        setNextClaimAt(
+          new Date(
+            nextClaim,
+          ).toISOString(),
+        );
       } else {
         setTimeLeft(0);
+
+        setNextClaimAt(null);
       }
 
-      // --------------------------------------------
-      // BOOST TIMER
-      // --------------------------------------------
-
       if (boostEndTime) {
-        const remaining = Math.max(0, Math.floor((boostEndTime - now) / 1000));
+        const boostRemaining =
+          Math.max(
+            0,
+            Math.ceil(
+              (
+                boostEndTime -
+                now
+              ) / 1000,
+            ),
+          );
 
-        setBoostTimeLeft(remaining);
+        setBoostTimeLeft(
+          boostRemaining,
+        );
 
-        if (remaining === 0) {
+        if (
+          boostRemaining === 0
+        ) {
           setBoostEndTime(null);
+
+          updateMiningValues(
+            false,
+          );
+        } else {
+          updateMiningValues(
+            true,
+          );
         }
       } else {
         setBoostTimeLeft(0);
+
+        updateMiningValues(
+          false,
+        );
       }
-    }, 1000);
+    };
+
+    updateTimers();
+
+    const interval =
+      setInterval(
+        updateTimers,
+        1000,
+      );
 
     return () => {
-      clearInterval(interval);
+      clearInterval(
+        interval,
+      );
     };
-  }, [lastClaimTime, boostEndTime]);
+  }, [
+    lastClaimTime,
+    boostEndTime,
+  ]);
 
   // ====================================================
-  // MINING
+  // MINING STATUS
   // ====================================================
 
-  const canClaim = !lastClaimTime || timeLeft === 0;
+  const canClaim =
+    !lastClaimTime ||
+    timeLeft <= 0;
 
-  const isBoostActive = boostTimeLeft > 0;
+  const isBoostActive =
+    boostTimeLeft > 0;
 
   // ====================================================
   // CLAIM MINING REWARD
   // ====================================================
 
-  const claimReward = async () => {
-    try {
-      if (!canClaim) {
-        return;
-      }
-
-      console.log("====================================");
-
-      console.log("MINING COINS...");
-
-      // --------------------------------------------
-      // CALL BACKEND
-      // --------------------------------------------
-
-      const response = await apiRequest("/wallet/mine", {
-        method: "POST",
-      });
-
-      console.log("MINING RESPONSE:", response);
-
-      if (!response?.success) {
-        throw new Error(response?.message || "Mining failed");
-      }
-
-      // --------------------------------------------
-      // DATABASE WALLET
-      // --------------------------------------------
-
-      const wallet = response?.data?.wallet;
-
-      if (wallet) {
-        setBalance(Number(wallet.balance || 0));
-
-        if (wallet.last_mined_at) {
-          setLastClaimTime(new Date(wallet.last_mined_at).getTime());
-        }
-      }
-
-      // --------------------------------------------
-      // TRANSACTION
-      // --------------------------------------------
-
-      const transaction = response?.data?.transaction;
-
-      if (transaction) {
-        setTransactions((current) => [
-          {
-            id: transaction.id,
-
-            type: "mine",
-
-            amount: Number(transaction.amount || 0),
-
-            description: transaction.description || "Daily mining reward",
-
-            date: transaction.created_at
-              ? new Date(transaction.created_at).getTime()
-              : Date.now(),
-          },
-
-          ...current,
-        ]);
-      }
-
-      // --------------------------------------------
-      // SCHEDULE REMINDER
-      // --------------------------------------------
-
+  const claimReward =
+    async (): Promise<void> => {
       try {
-        await scheduleMiningReminder();
-      } catch (notificationError) {
-        console.error("NOTIFICATION ERROR:", notificationError);
+        if (!canClaim) {
+          return;
+        }
+
+        const response =
+          await apiRequest(
+            '/wallet/mine',
+            {
+              method: 'POST',
+            },
+          );
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Mining failed.',
+          );
+        }
+
+        await refreshWallet();
+
+        await refreshTransactions();
+
+        try {
+          await scheduleMiningReminder();
+        } catch (
+          notificationError
+        ) {
+          console.error(
+            'NOTIFICATION ERROR:',
+            notificationError,
+          );
+        }
+      } catch (error: any) {
+        console.error(
+          'CLAIM REWARD ERROR:',
+          error,
+        );
+
+        throw error;
       }
-
-      console.log("MINING SUCCESSFUL");
-
-      console.log("DATABASE BALANCE:", wallet?.balance);
-
-      console.log("====================================");
-    } catch (error: any) {
-      console.error("CLAIM REWARD ERROR:", error);
-
-      throw error;
-    }
-  };
+    };
 
   // ====================================================
   // BOOST
@@ -773,319 +1563,305 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
 
   const activateBoost = () => {
     if (isBoostActive) {
-      console.log("BOOST ALREADY ACTIVE");
+      console.log(
+        'BOOST ALREADY ACTIVE',
+      );
 
       return;
     }
 
-    const end = Date.now() + 60 * 60 * 1000;
+    const end =
+      Date.now() +
+      60 * 60 * 1000;
 
     setBoostEndTime(end);
 
-    console.log("BOOST ACTIVATED");
+    setBoostTimeLeft(
+      60 * 60,
+    );
 
-    console.log("BOOST ENDS:", new Date(end));
+    updateMiningValues(true);
+
+    console.log(
+      'BOOST ACTIVATED',
+    );
   };
 
   // ====================================================
   // START TASK
   // ====================================================
-  const startTask = async (taskId: string) => {
-    try {
-      console.log("====================================");
-      console.log("STARTING TASK");
-      console.log("TASK ID:", taskId);
-      console.log("====================================");
 
-      if (!taskId) {
-        throw new Error("Task ID is required");
-      }
+  const startTask =
+    async (
+      taskId: string,
+    ): Promise<void> => {
+      try {
+        if (!taskId) {
+          throw new Error(
+            'Task ID is required.',
+          );
+        }
 
-      // Make sure we are not sending a fake numeric ID
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const response =
+          await apiRequest(
+            `/tasks/${taskId}/start`,
+            {
+              method: 'POST',
+            },
+          );
 
-      if (!uuidRegex.test(taskId)) {
-        console.error("INVALID TASK UUID:", taskId);
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to start task.',
+          );
+        }
 
-        throw new Error(
-          "Invalid task ID. Please reload tasks from the database.",
+        const startedAt =
+          response?.data?.startedAt
+            ? new Date(
+                response.data
+                  .startedAt,
+              ).getTime()
+            : Date.now();
+
+        setTasks(
+          (currentTasks) =>
+            currentTasks.map(
+              (task) =>
+                task.id === taskId
+                  ? {
+                      ...task,
+                      started: true,
+                      startedAt,
+                    }
+                  : task,
+            ),
         );
+      } catch (error) {
+        console.error(
+          'START TASK ERROR:',
+          error,
+        );
+
+        throw error;
       }
+    };
 
-      const response = await apiRequest(`/tasks/${taskId}/start`, {
-        method: "POST",
-      });
-
-      console.log("START TASK RESPONSE:", response);
-
-      if (!response?.success) {
-        throw new Error(response?.message || "Failed to start task");
-      }
-
-      const startedAt = response?.data?.startedAt
-        ? new Date(response.data.startedAt).getTime()
-        : Date.now();
-
-      setTasks((currentTasks) =>
-        currentTasks.map((task) =>
-          task.id === taskId
-            ? {
-                ...task,
-                started: true,
-                startedAt,
-              }
-            : task,
-        ),
-      );
-
-      console.log("TASK STARTED SUCCESSFULLY");
-    } catch (error) {
-      console.error("START TASK ERROR:", error);
-
-      throw error;
-    }
-  };
   // ====================================================
   // COMPLETE TASK
   // ====================================================
 
-  const completeTask = async (taskId: string) => {
-    try {
-      console.log("====================================");
-      console.log("COMPLETING TASK");
-      console.log("TASK ID:", taskId);
-      console.log("====================================");
+  const completeTask =
+    async (
+      taskId: string,
+    ): Promise<void> => {
+      try {
+        if (!taskId) {
+          throw new Error(
+            'Task ID is required.',
+          );
+        }
 
-      if (!taskId) {
-        throw new Error("Task ID is required");
-      }
+        const task =
+          tasks.find(
+            (item) =>
+              item.id === taskId,
+          );
 
-      // Validate UUID
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        if (!task) {
+          throw new Error(
+            'Task not found.',
+          );
+        }
 
-      if (!uuidRegex.test(taskId)) {
-        console.error("INVALID TASK UUID:", taskId);
+        if (task.completed) {
+          throw new Error(
+            'Task already completed.',
+          );
+        }
 
-        throw new Error(
-          "Invalid task ID. Please reload the tasks from the database.",
+        const response =
+          await apiRequest(
+            `/tasks/${taskId}/complete`,
+            {
+              method: 'POST',
+            },
+          );
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to complete task.',
+          );
+        }
+
+        setTasks(
+          (currentTasks) =>
+            currentTasks.map(
+              (item) =>
+                item.id === taskId
+                  ? {
+                      ...item,
+                      completed: true,
+                    }
+                  : item,
+            ),
         );
-      }
 
-      // Find task locally
-      const task = tasks.find((item) => item.id === taskId);
-
-      if (!task) {
-        throw new Error("Task not found in the current task list.");
-      }
-
-      if (task.completed) {
-        throw new Error("Task already completed.");
-      }
-
-      // ============================================
-      // CALL BACKEND
-      // ============================================
-
-      const response = await apiRequest(`/tasks/${taskId}/complete`, {
-        method: "POST",
-      });
-
-      console.log("COMPLETE TASK RESPONSE:", response);
-
-      if (!response?.success) {
-        throw new Error(response?.message || "Failed to complete task");
-      }
-
-      // ============================================
-      // DATABASE WALLET
-      // ============================================
-
-      const updatedWallet = response?.data?.wallet;
-
-      if (updatedWallet) {
-        setBalance(Number(updatedWallet.balance || 0));
-      }
-
-      // ============================================
-      // REWARD
-      // ============================================
-
-      const reward = Number(response?.data?.reward || task.reward || 5);
-
-      // ============================================
-      // MARK TASK COMPLETED
-      // ============================================
-
-      setTasks((currentTasks) =>
-        currentTasks.map((item) =>
-          item.id === taskId
-            ? {
-                ...item,
-                completed: true,
-              }
-            : item,
-        ),
-      );
-
-      // ============================================
-      // TRANSACTION
-      // ============================================
-
-      const transaction = response?.data?.transaction;
-
-      if (transaction) {
-        setTransactions((current) => [
-          {
-            id: transaction.id,
-
-            type: "task",
-
-            amount: Number(transaction.amount || reward),
-
-            description: transaction.description || `Completed: ${task.title}`,
-
-            date: transaction.created_at
-              ? new Date(transaction.created_at).getTime()
-              : Date.now(),
-          },
-
-          ...current,
+        await Promise.all([
+          refreshWallet(),
+          refreshTransactions(),
         ]);
+      } catch (error) {
+        console.error(
+          'COMPLETE TASK ERROR:',
+          error,
+        );
+
+        throw error;
       }
+    };
 
-      console.log("====================================");
-      console.log("TASK COMPLETED SUCCESSFULLY");
-      console.log("TASK:", task.title);
-      console.log("REWARD:", reward);
-      console.log("DATABASE BALANCE:", updatedWallet?.balance);
-      console.log("====================================");
-    } catch (error) {
-      console.error("COMPLETE TASK ERROR:", error);
-
-      throw error;
-    }
-  };
   // ====================================================
   // ADD TASK
   // ====================================================
-  const addTask = async (
-    title: string,
-    description: string,
-    reward: number,
-    taskType: "watch_ad" | "watch_video" | "referral" | "profile" | "social",
-  ) => {
-    try {
-      console.log("====================================");
-      console.log("ADDING TASK TO DATABASE...");
-      console.log("TITLE:", title);
-      console.log("DESCRIPTION:", description);
-      console.log("REWARD:", reward);
-      console.log("TASK TYPE:", taskType);
-      console.log("====================================");
 
-      const response = await apiRequest("/tasks", {
-        method: "POST",
+  const addTask =
+    async (
+      title: string,
+      description: string,
+      reward: number,
+      taskType:
+        | 'watch_ad'
+        | 'watch_video'
+        | 'referral'
+        | 'profile'
+        | 'social',
+    ): Promise<void> => {
+      try {
+        const response =
+          await apiRequest(
+            '/tasks',
+            {
+              method: 'POST',
 
-        body: JSON.stringify({
-          title,
-          description,
-          reward,
-          taskType,
-        }),
-      });
+              body:
+                JSON.stringify({
+                  title,
+                  description,
+                  reward,
+                  taskType,
+                }),
+            },
+          );
 
-      console.log("CREATE TASK RESPONSE:", response);
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to create task.',
+          );
+        }
 
-      if (!response?.success) {
-        throw new Error(response?.message || "Failed to create task");
+        await refreshTasks();
+      } catch (error) {
+        console.error(
+          'ADD TASK ERROR:',
+          error,
+        );
+
+        throw error;
       }
-
-      // Reload tasks from Supabase
-      await refreshTasks();
-
-      console.log("TASK CREATED SUCCESSFULLY IN DATABASE");
-
-      console.log("====================================");
-    } catch (error) {
-      console.error("ADD TASK ERROR:", error);
-
-      throw error;
-    }
-  };
+    };
 
   // ====================================================
   // EDIT TASK
   // ====================================================
-  const editTask = async (
-    id: string,
-    title: string,
-    description: string,
-    reward: number,
-  ) => {
-    try {
-      console.log("UPDATING TASK:", id);
 
-      const response = await apiRequest(`/tasks/${id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          title,
-          description,
-          reward,
-        }),
-      });
+  const editTask =
+    async (
+      id: string,
+      title: string,
+      description: string,
+      reward: number,
+    ): Promise<void> => {
+      try {
+        const response =
+          await apiRequest(
+            `/tasks/${id}`,
+            {
+              method: 'PUT',
 
-      console.log("UPDATE TASK RESPONSE:", response);
+              body:
+                JSON.stringify({
+                  title,
+                  description,
+                  reward,
+                }),
+            },
+          );
 
-      if (!response?.success) {
-        throw new Error(response?.message || "Failed to update task");
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to update task.',
+          );
+        }
+
+        await refreshTasks();
+      } catch (error) {
+        console.error(
+          'EDIT TASK ERROR:',
+          error,
+        );
+
+        throw error;
       }
-
-      await refreshTasks();
-
-      console.log("TASK UPDATED SUCCESSFULLY");
-    } catch (error) {
-      console.error("EDIT TASK ERROR:", error);
-
-      throw error;
-    }
-  };
+    };
 
   // ====================================================
   // DELETE TASK
   // ====================================================
 
-  const deleteTask = async (id: string) => {
-    try {
-      console.log("DELETING TASK:", id);
+  const deleteTask =
+    async (
+      id: string,
+    ): Promise<void> => {
+      try {
+        const response =
+          await apiRequest(
+            `/tasks/${id}`,
+            {
+              method: 'DELETE',
+            },
+          );
 
-      const response = await apiRequest(`/tasks/${id}`, {
-        method: "DELETE",
-      });
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              'Failed to delete task.',
+          );
+        }
 
-      console.log("DELETE TASK RESPONSE:", response);
+        await refreshTasks();
+      } catch (error) {
+        console.error(
+          'DELETE TASK ERROR:',
+          error,
+        );
 
-      if (!response?.success) {
-        throw new Error(response?.message || "Failed to delete task");
+        throw error;
       }
-
-      await refreshTasks();
-
-      console.log("TASK DELETED SUCCESSFULLY");
-    } catch (error) {
-      console.error("DELETE TASK ERROR:", error);
-
-      throw error;
-    }
-  };
+    };
 
   // ====================================================
   // RESET TASKS
   // ====================================================
 
   const resetAllTasks = () => {
-    setTasks(defaultTasks);
+    setTasks(
+      defaultTasks,
+    );
   };
 
   // ====================================================
@@ -1094,27 +1870,23 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
 
   const swapCoins = (
     amount: number,
-    type: "airtime" | "data" | "usdt",
+    type:
+      | 'airtime'
+      | 'data'
+      | 'usdt',
   ): boolean => {
-    if (amount <= 0 || amount > balance) {
+    if (
+      amount <= 0 ||
+      amount > balance
+    ) {
       return false;
     }
 
-    setBalance((currentBalance) => currentBalance - amount);
-
-    const transaction: Transaction = {
-      id: Date.now().toString(),
-
-      type: "swap",
-
-      amount: -amount,
-
-      description: `Swapped coins for ${type}`,
-
-      date: Date.now(),
-    };
-
-    setTransactions((current) => [transaction, ...current]);
+    setBalance(
+      (currentBalance) =>
+        currentBalance -
+        amount,
+    );
 
     return true;
   };
@@ -1126,73 +1898,256 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
   return (
     <UserContext.Provider
       value={{
+        // AUTH
         isLoggedIn,
-
         user,
-
-        balance,
-
-        lastClaimTime,
-
-        boostEndTime,
-
-        tasks,
-
-        transactions,
-
         isLoading,
-
         register,
-
         login,
-
         logout,
-
         markLoggedIn,
-
         refreshProfile,
+        registerPushNotificationDevice,
 
+        // WALLET
+        balance,
+        walletAddress,
+        refreshWallet,
+        transferCoins,
+
+        // MINING
+        lastClaimTime,
+        boostEndTime,
         canClaim,
-
         timeLeft,
-
         claimReward,
+        miningReward,
+        miningRate,
+        boostMultiplier,
+        nextClaimAt,
+        fetchMiningStatus,
 
+        // BOOST
         isBoostActive,
-
         boostTimeLeft,
-
         activateBoost,
 
+        // TASKS
+        tasks,
         completeTask,
-
         startTask,
-
         addTask,
-
         editTask,
-
         deleteTask,
-
         resetAllTasks,
 
+        // TRANSACTIONS
+        transactions,
+        refreshTransactions,
+
+        // SWAP
         swapCoins,
       }}
     >
       {children}
     </UserContext.Provider>
   );
+  // ====================================================
+// REFRESH NOTIFICATIONS
+// ====================================================
+
+const refreshNotifications =
+  async (): Promise<void> => {
+    try {
+      const response =
+        await apiRequest(
+          '/notifications',
+        );
+
+      if (
+        !response?.success
+      ) {
+        throw new Error(
+          response?.message ||
+            'Failed to load notifications.',
+        );
+      }
+
+      const data =
+        Array.isArray(
+          response?.data,
+        )
+          ? response.data
+          : [];
+
+      setNotifications(
+        data,
+      );
+
+      setUnreadNotificationCount(
+        Number(
+          response?.unreadCount ||
+            0,
+        ),
+      );
+    } catch (error) {
+      console.error(
+        'REFRESH NOTIFICATIONS ERROR:',
+        error,
+      );
+    }
+  };
+
+
+// ====================================================
+// MARK NOTIFICATION AS READ
+// ====================================================
+
+const markNotificationAsRead =
+  async (
+    notificationId: string,
+  ): Promise<void> => {
+    try {
+      if (!notificationId) {
+        return;
+      }
+
+      const response =
+        await apiRequest(
+          `/notifications/${notificationId}/read`,
+          {
+            method:
+              'PATCH',
+          },
+        );
+
+      if (
+        !response?.success
+      ) {
+        throw new Error(
+          response?.message ||
+            'Failed to mark notification as read.',
+        );
+      }
+
+      setNotifications(
+        (current) =>
+          current.map(
+            (notification) =>
+              notification.id ===
+              notificationId
+                ? {
+                    ...notification,
+
+                    is_read:
+                      true,
+                  }
+                : notification,
+          ),
+      );
+
+      setUnreadNotificationCount(
+        (current) =>
+          Math.max(
+            0,
+            current - 1,
+          ),
+      );
+    } catch (error) {
+      console.error(
+        'MARK NOTIFICATION READ ERROR:',
+        error,
+      );
+    }
+  };
+
+
+// ====================================================
+// MARK ALL NOTIFICATIONS AS READ
+// ====================================================
+
+const markAllNotificationsAsRead =
+  async (): Promise<void> => {
+    try {
+      const response =
+        await apiRequest(
+          '/notifications/read-all',
+          {
+            method:
+              'PATCH',
+          },
+        );
+
+      if (
+        !response?.success
+      ) {
+        throw new Error(
+          response?.message ||
+            'Failed to mark notifications as read.',
+        );
+      }
+
+      setNotifications(
+        (current) =>
+          current.map(
+            (notification) => ({
+              ...notification,
+
+              is_read:
+                true,
+            }),
+          ),
+      );
+
+      setUnreadNotificationCount(
+        0,
+      );
+    } catch (error) {
+      console.error(
+        'MARK ALL NOTIFICATIONS READ ERROR:',
+        error,
+      );
+    }
+  };
+  // ====================================================
+// NOTIFICATION POLLING
+// ====================================================
+
+useEffect(() => {
+  if (!isLoggedIn) {
+    return;
+  }
+
+  refreshNotifications();
+
+  const interval =
+    setInterval(() => {
+      refreshNotifications();
+    }, 15000);
+
+  return () => {
+    clearInterval(
+      interval,
+    );
+  };
+}, [
+  isLoggedIn,
+]);
 };
+
 
 // ======================================================
 // HOOK
 // ======================================================
 
 export const useUser = () => {
-  const context = useContext(UserContext);
+  const context =
+    useContext(UserContext);
 
   if (!context) {
-    throw new Error("useUser must be used inside UserProvider");
+    throw new Error(
+      'useUser must be used inside UserProvider',
+    );
   }
 
   return context;
